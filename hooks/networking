@@ -18,45 +18,34 @@ esac
 
 . /usr/share/initramfs-tools/hook-functions
 
-# Cut-down helper script for udhcpc.
-# Example scripts: http://git.busybox.net/busybox/tree/examples/udhcp
-mkdir -p ${DESTDIR}/etc/udhcpc
-cat >${DESTDIR}/etc/udhcpc/default.script << 'EOF'
-#!/bin/sh
-
-[ -n "$broadcast" ] && BROADCAST="broadcast $broadcast"
-[ -n "$subnet" ] && NETMASK="/$subnet"
-
-case "$1" in
-    deconfig)
-        ip addr flush $interface
-        ;;
-
-    renew|bound)
-        ip addr add dev $interface $ip $NETMASK $BROADCAST
-
-        if [ -n "$router" ] ; then
-            ip route flush dev $interface
-            metric=0
-            for i in $router ; do
-                ip route add default dev $interface via $i metric $((metric++)) 
-            done
-        fi
-
-        rm -f /etc/resolv.conf
-        [ -n "$domain" ] && echo search $domain >> /etc/resolv.conf
-        for i in $dns ; do
-            echo nameserver $i >> /etc/resolv.conf
-        done
-        ;;
-esac
-
-exit 0
-EOF
-chmod 755 ${DESTDIR}/etc/udhcpc/default.script
+# include a module dynamically loaded by a library
+# $1 - directory to search for the library (may be / to search all of initramfs)
+# $2 - library to search for
+# $3 - module to include relative to library found
+# example: lib_module /lib 'libc.so.*' 'libnss_dns.so.*'
+#	   lib_module /usr/lib 'libpango-*.so.*' 'pango/*/modules/pango-basic-fc.so'
+# Does not handle spaces in directory or module names and .. in module names.
+# Source: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=636697
+lib_module()
+{
+    local dir lib mod lib_dir i j
+    dir="$1"
+    lib="$2"
+    mod="$3"
+    { find "${DESTDIR}${dir}" -name "${lib}" -type l
+      find "${DESTDIR}${dir}" -name "${lib}" -type f ; } | { while read i ; do
+        lib_dir="$(dirname "$i" | sed -e "s ^${DESTDIR}  " )"
+        ls "${lib_dir}"/${mod} | { while read j ; do
+        copy_exec "$j"
+        done ; }
+    done ; }
+}
 
 # sys-libs/glibc loads additional libraries reqired for domain name lookups dynamically,
 # they doesn't get picked up by initramfs installation scripts. Let's include them manually.
 # For more information, see https://wiki.gentoo.org/wiki/Custom_Initramfs#DNS
-copy_exec /lib/arm-linux-gnueabihf/libnss_mdns4_minimal.so.2
-copy_exec /lib/arm-linux-gnueabihf/libnss_dns.so.2
+lib_module /lib 'libc.so.*' 'libnss_dns.*'
+lib_module /lib 'libc.so.*' 'libnss_files.so.*'
+
+# If you disable hooks/curl, uncomment the line below
+#lib_module /lib 'libc.so.*' 'libresolv.so.*'
